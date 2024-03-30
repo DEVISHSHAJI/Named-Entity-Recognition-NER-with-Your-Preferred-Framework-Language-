@@ -1,0 +1,109 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchtext.vocab import Vocab
+from torchtext.data import Field, NestedField, TabularDataset, BucketIterator
+
+# Define the architecture of the Bidirectional LSTM-CRF model
+class BiLSTM_CRF(nn.Module):
+    def __init__(self, input_dim, embedding_dim, hidden_dim, output_dim):
+        super(BiLSTM_CRF, self).__init__()
+        self.embedding = nn.Embedding(input_dim, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2, bidirectional=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.crf = CRF(output_dim)
+        
+    def forward(self, x):
+        embedded = self.embedding(x)
+        lstm_output, _ = self.lstm(embedded)
+        emissions = self.fc(lstm_output)
+        return emissions
+
+# Define the Conditional Random Field (CRF) layer
+class CRF(nn.Module):
+    def __init__(self, num_tags):
+        super(CRF, self).__init__()
+        self.num_tags = num_tags
+        self.transitions = nn.Parameter(torch.randn(num_tags, num_tags))
+        self.start_transitions = nn.Parameter(torch.randn(num_tags))
+        self.end_transitions = nn.Parameter(torch.randn(num_tags))
+    
+    def forward(self, emissions):
+        # Forward algorithm for calculating the partition function
+        # Viterbi algorithm for decoding the best path
+        # Training procedure for learning transition parameters
+        pass
+
+# Define training function
+def train(model, iterator, optimizer, criterion):
+    model.train()
+    for batch in iterator:
+        text, labels = batch.text, batch.labels
+        optimizer.zero_grad()
+        predictions = model(text)
+        loss = -model.crf(predictions, labels)
+        loss.backward()
+        optimizer.step()
+
+# Define evaluation function
+def evaluate(model, iterator, criterion):
+    model.eval()
+    epoch_loss = 0
+    for batch in iterator:
+        text, labels = batch.text, batch.labels
+        predictions = model(text)
+        loss = -model.crf(predictions, labels)
+        epoch_loss += loss.item()
+    return epoch_loss / len(iterator)
+
+# Define main function
+def main():
+    # Define fields
+    TEXT = Field(lower=True)
+    LABELS = Field(unk_token=None)
+    fields = [("text", TEXT), ("labels", LABELS)]
+    
+    # Load dataset
+    train_data, valid_data, test_data = TabularDataset.splits(
+        path="data_path",
+        train="train.csv",
+        validation="valid.csv",
+        test="test.csv",
+        format="csv",
+        fields=fields
+    )
+    
+    # Build vocabulary
+    TEXT.build_vocab(train_data)
+    LABELS.build_vocab(train_data)
+    
+    # Define iterators
+    train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
+        datasets=(train_data, valid_data, test_data),
+        batch_size=32,
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
+    
+    # Define model parameters
+    INPUT_DIM = len(TEXT.vocab)
+    EMBEDDING_DIM = 100
+    HIDDEN_DIM = 256
+    OUTPUT_DIM = len(LABELS.vocab)
+    
+    # Initialize model, optimizer, and criterion
+    model = BiLSTM_CRF(INPUT_DIM, EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
+    optimizer = optim.Adam(model.parameters())
+    criterion = nn.CrossEntropyLoss(ignore_index=LABELS.vocab.stoi[LABELS.pad_token])
+    
+    # Train the model
+    for epoch in range(num_epochs):
+        train(model, train_iterator, optimizer, criterion)
+        valid_loss = evaluate(model, valid_iterator, criterion)
+        print(f"Epoch: {epoch+1}, Validation Loss: {valid_loss:.4f}")
+    
+    # Evaluate the model on test set
+    test_loss = evaluate(model, test_iterator, criterion)
+    print(f"Test Loss: {test_loss:.4f}")
+
+if __name__ == "__main__":
+    main()
