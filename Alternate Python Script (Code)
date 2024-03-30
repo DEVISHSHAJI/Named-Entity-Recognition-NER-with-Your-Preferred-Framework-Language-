@@ -1,0 +1,103 @@
+import spacy
+import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+from sklearn.model_selection import train_test_split
+import pandas as pd
+
+# Define the BiLSTM model
+class BiLSTM(nn.Module):
+    def __init__(self, input_dim, embedding_dim, hidden_dim, output_dim):
+        super(BiLSTM, self).__init__()
+        self.embedding = nn.Embedding(input_dim, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2, bidirectional=True, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+    
+    def forward(self, text):
+        embedded = self.embedding(text)
+        lstm_output, _ = self.lstm(embedded)
+        predictions = self.fc(lstm_output)
+        return predictions
+
+# Custom dataset class
+class CustomDataset(Dataset):
+    def __init__(self, texts, labels, tokenizer, tag_map):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.tag_map = tag_map
+    
+    def __len__(self):
+        return len(self.texts)
+    
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        label = [self.tag_map[tag] for tag in self.labels[idx].split()]
+        tokens = self.tokenizer(text)
+        return tokens, label
+
+# Function to tokenize text using spaCy
+def tokenize_text(text):
+    return [token.text for token in nlp(text)]
+
+# Function to convert tokens and labels to tensors
+def collate_batch(batch):
+    texts, labels = zip(*batch)
+    text_lengths = [len(text) for text in texts]
+    padded_texts = pad_sequence([torch.tensor(text) for text in texts], batch_first=True)
+    padded_labels = pad_sequence([torch.tensor(label) for label in labels], batch_first=True, padding_value=-1)
+    return padded_texts, padded_labels, text_lengths
+
+# Load spaCy English model
+nlp = spacy.load("en_core_web_sm")
+
+# Load and preprocess dataset
+data = pd.read_csv("data.csv")
+texts = data["text"].tolist()
+labels = data["labels"].tolist()
+
+# Define tag map
+tag_map = {"O": 0, "LOC": 1, "ORG": 2, "PER": 3}
+
+# Split dataset into train and test
+train_texts, test_texts, train_labels, test_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
+
+# Tokenize train and test texts
+train_texts = [tokenize_text(text) for text in train_texts]
+test_texts = [tokenize_text(text) for text in test_texts]
+
+# Define dataset and dataloader
+train_dataset = CustomDataset(train_texts, train_labels, tokenize_text, tag_map)
+train_loader = DataLoader(train_dataset, batch_size=4, collate_fn=collate_batch)
+
+# Define model parameters
+INPUT_DIM = len(nlp.vocab)
+EMBEDDING_DIM = 100
+HIDDEN_DIM = 128
+OUTPUT_DIM = len(tag_map)
+
+# Initialize model, optimizer, and criterion
+model = BiLSTM(INPUT_DIM, EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
+optimizer = optim.Adam(model.parameters())
+criterion = nn.CrossEntropyLoss(ignore_index=-1)
+
+# Train the model
+for epoch in range(5):
+    model.train()
+    for batch in train_loader:
+        texts, labels, text_lengths = batch
+        optimizer.zero_grad()
+        predictions = model(texts)
+        predictions_flat = predictions.view(-1, predictions.shape[-1])
+        labels_flat = labels.view(-1)
+        mask = (labels_flat != -1)
+        loss = criterion(predictions_flat[mask], labels_flat[mask])
+        loss.backward()
+        optimizer.step()
+    print(f"Epoch {epoch+1}/{5}, Loss: {loss.item()}")
+
+# Save the trained model
+torch.save(model.state_dict(), "ner_model.pth")
